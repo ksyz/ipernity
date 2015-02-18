@@ -102,7 +102,7 @@ func call_auth_getFrob() Authgetfrob {
 	)
 
 	parms = append(parms, Parameter{"api_key", apikey})
-	f := callApiMethod(parms, "auth.getFrob")
+	f := CallApiMethod(parms, "auth.getFrob")
 	jsonresult := &Authgetfrob{}
 	json.Unmarshal(f, &jsonresult)
 
@@ -120,7 +120,7 @@ func call_auth_getToken(frob string) Authgettoken {
 	)
 
 	parms = append(parms, Parameter{"api_key", apikey}, Parameter{"frob", frob})
-	f := callApiMethod(parms, "auth.getToken")
+	f := CallApiMethod(parms, "auth.getToken")
 	jsonresult := &Authgettoken{}
 	json.Unmarshal(f, &jsonresult)
 
@@ -133,7 +133,7 @@ func call_auth_getToken(frob string) Authgettoken {
 }
 
 // call an ipernity api method
-func callApiMethod(parameters pslice, method string) []byte {
+func CallApiMethod(parameters pslice, method string) []byte {
 	var (
 		encodedval string
 		signparams string
