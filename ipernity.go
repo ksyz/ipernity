@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -20,6 +21,7 @@ type Authgetfrob struct {
 	Auth struct {
 		Frob string `json:"frob"`
 	}
+	// XXX: coalesce
 	Api struct {
 		Status  string `json:"status"`
 		At      string `json:"at"`
@@ -65,14 +67,15 @@ type Parameter struct {
 type pslice []Parameter
 
 const (
-	apikey    = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX" // API Key, a constant obtained from ipernity
-	apisecret = "YYYYYYYYYYYYYYYY"                 // API Secret, a constant obtained from ipernity
 	tokenfile = "ipernity_auth_token"              // Filename where ipernity token is cached
 )
 
 var (
-	token   = "" // token, either retrieved from local cache or retrieved from ipernity via api call
-	user_id = "" // your ipernity user id
+	apikey    = "" // API Key, a constant obtained from ipernity
+	apisecret = "" // API Secret, a constant obtained from ipernity
+	token   = ""           // api auth token, either cached locally in a file or obtained from ipernity via api call
+	user_id = ""           // your ipernity user id
+	HttpClient http.Client // Persistent http client
 )
 
 // Len is part of sort.Interface
@@ -96,44 +99,50 @@ func signRequest(request string) string {
 }
 
 // call ipernity auth.getFrob api
-func call_auth_getFrob() Authgetfrob {
+func call_auth_getFrob() (Authgetfrob, error) {
 	var (
 		parms pslice
 	)
 
 	parms = append(parms, Parameter{"api_key", apikey})
-	f := CallApiMethod(parms, "auth.getFrob")
+	f, err := CallApiMethod(parms, "auth.getFrob")
+	if err != nil {
+		return Authgetfrob{}, err
+	}
 	jsonresult := &Authgetfrob{}
 	json.Unmarshal(f, &jsonresult)
 
 	if jsonresult.Api.Status != "ok" {
-		fmt.Println("Error getting frob: " + jsonresult.Api.Code + " " + jsonresult.Api.Message)
+		return *jsonresult, errors.New("Error getting frob: " + jsonresult.Api.Code + " " + jsonresult.Api.Message)
 	}
 
-	return *jsonresult
+	return *jsonresult, nil
 }
 
 // call ipernity auth.getToken api
-func call_auth_getToken(frob string) Authgettoken {
+func call_auth_getToken(frob string) (Authgettoken, error) {
 	var (
 		parms pslice
 	)
 
 	parms = append(parms, Parameter{"api_key", apikey}, Parameter{"frob", frob})
-	f := CallApiMethod(parms, "auth.getToken")
+	f, err := CallApiMethod(parms, "auth.getToken")
+	if err != nil {
+		return Authgettoken{}, err
+	}
 	jsonresult := &Authgettoken{}
 	json.Unmarshal(f, &jsonresult)
 
 	if jsonresult.Api.Status != "ok" {
-		fmt.Println("Error getting frob: " + jsonresult.Api.Code + " " + jsonresult.Api.Message)
+		return *jsonresult, errors.New("Error getting frob: " + jsonresult.Api.Code + " " + jsonresult.Api.Message)
 	}
 	user_id = jsonresult.Auth.User.User_id
 
-	return *jsonresult
+	return *jsonresult, nil
 }
 
 // call an ipernity api method
-func CallApiMethod(parameters pslice, method string) []byte {
+func CallApiMethod(parameters pslice, method string) ([]byte, error) {
 	var (
 		encodedval string
 		signparams string
@@ -149,17 +158,13 @@ func CallApiMethod(parameters pslice, method string) []byte {
 	}
 	urlparams += "api_sig=" + signRequest(signparams+method+apisecret)
 
-	//	fmt.Println(urlparams)
-	resp, err := http.Post("http://api.ipernity.com/api/"+method+"/json", "application/x-www-form-urlencoded", bytes.NewBufferString(urlparams))
+	resp, err := HttpClient.Post("http://api.ipernity.com/api/"+method+"/json", "application/x-www-form-urlencoded", bytes.NewBufferString(urlparams))
+	if err != nil {
+		return []byte{}, err
+	}
 	defer resp.Body.Close()
 	body, err := ioutil.ReadAll(resp.Body)
-	//	fmt.Println(string(body))
-
-	if err != nil {
-		panic(err)
-	}
-
-	return body
+	return body, err
 }
 
 // return URL user must visit to authorize this program to talk to ipernity
@@ -188,14 +193,24 @@ func getAuthUrl(frob string) string {
 
 // log in to ipernity
 func Login() error {
-	// see if we have a token file
 
+	apikey = os.Getenv("IPERNITY_API_KEY")
+	if apikey == "" {
+		apikey = "XXX" // replace with value from http://www.ipernity.com/apps/key/0
+	}
+
+	apisecret = os.Getenv("IPERNITY_API_SECRET")	
+	if apisecret == "" {
+		apisecret = "YYY" // replace with value from http://www.ipernity.com/apps/key/0
+	}
+
+	// see if we have a token file
 	data, err := ioutil.ReadFile(tokenfile)
 
 	if err != nil {
-		frob := call_auth_getFrob()
-		if frob.Api.Status != "ok" {
-			panic(err)
+		frob, err := call_auth_getFrob()
+		if err != nil {
+			return err
 		}
 		fmt.Println("go to " + getAuthUrl(frob.Auth.Frob))
 		fmt.Println("and grant the permissions, then press <ENTER>")
@@ -203,14 +218,14 @@ func Login() error {
 		input, err := consolereader.ReadString('\n')
 		input = input
 
-		tokenjson := call_auth_getToken(frob.Auth.Frob)
-		if tokenjson.Api.Status != "ok" {
-			panic(err)
+		tokenjson, err := call_auth_getToken(frob.Auth.Frob)
+		if err != nil {
+			return err
 		}
 		token = tokenjson.Auth.Token
 		err = ioutil.WriteFile(tokenfile, []byte(token), 0644)
 		if err != nil {
-			panic(err)
+			return err
 		}
 	} else {
 		token = string(data)
